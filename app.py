@@ -1,11 +1,11 @@
 import streamlit as st
-import cv2
 import numpy as np
 import requests
 import re
+import base64
 from PIL import Image
 from pyzbar.pyzbar import decode
-import urllib.parse
+from urllib.parse import urlparse
 
 
 # -------------------------------
@@ -20,21 +20,43 @@ st.set_page_config(
 
 
 st.title("🔐 Cyber Threat Analyzer")
+
 st.write(
-    "Analyze QR codes and URLs for possible phishing or malicious activity."
+    """
+    Analyze QR codes and URLs for possible phishing,
+    malicious indicators, and threat intelligence.
+    """
 )
 
 
 # -------------------------------
-# URL Analysis Function
+# URL Validation
+# -------------------------------
+
+def valid_url(url):
+
+    try:
+        result = urlparse(url)
+
+        return all([
+            result.scheme in ["http", "https"],
+            result.netloc
+        ])
+
+    except:
+        return False
+
+
+
+# -------------------------------
+# Local URL Threat Analysis
 # -------------------------------
 
 def analyze_url(url):
 
-    result = {
-        "Risk": "Low",
-        "Reasons": []
-    }
+    risk_score = 0
+    reasons = []
+
 
     suspicious_words = [
         "login",
@@ -44,22 +66,30 @@ def analyze_url(url):
         "account",
         "bank",
         "password",
-        "free"
+        "free",
+        "gift",
+        "confirm",
+        "signin"
     ]
 
 
     for word in suspicious_words:
+
         if word in url.lower():
-            result["Risk"] = "Medium"
-            result["Reasons"].append(
+
+            risk_score += 10
+
+            reasons.append(
                 f"Suspicious keyword detected: {word}"
             )
 
 
     if len(url) > 100:
-        result["Risk"] = "Medium"
-        result["Reasons"].append(
-            "Very long URL detected"
+
+        risk_score += 15
+
+        reasons.append(
+            "Unusually long URL"
         )
 
 
@@ -67,61 +97,138 @@ def analyze_url(url):
         r"\d+\.\d+\.\d+\.\d+",
         url
     ):
-        result["Risk"] = "High"
-        result["Reasons"].append(
-            "URL contains IP address"
+
+        risk_score += 30
+
+        reasons.append(
+            "URL contains direct IP address"
         )
 
 
-    return result
+    if "@" in url:
+
+        risk_score += 25
+
+        reasons.append(
+            "URL contains @ symbol (possible spoofing)"
+        )
+
+
+    if url.count("-") > 3:
+
+        risk_score += 10
+
+        reasons.append(
+            "Multiple hyphens detected"
+        )
+
+
+    if risk_score >= 50:
+
+        risk="High"
+
+    elif risk_score >=30:
+
+        risk="Medium"
+
+    else:
+
+        risk="Low"
 
 
 
-# -------------------------------
-# VirusTotal Function
-# -------------------------------
+    return {
 
-def check_virustotal(url, api_key):
+        "Risk Level": risk,
 
-    if not api_key:
-        return "API Key Missing"
+        "Risk Score": risk_score,
 
+        "Reasons": reasons
 
-    headers = {
-        "x-apikey": api_key
     }
 
 
-    url_id = (
-        urllib.parse
-        .quote(url, safe="")
-    )
+
+# -------------------------------
+# VirusTotal Integration
+# -------------------------------
+
+def check_virustotal(url):
+
+
+    try:
+
+        api_key = st.secrets["VT_API_KEY"]
+
+
+    except:
+
+        return "VirusTotal API Key not configured"
+
+
+
+    headers = {
+
+        "x-apikey": api_key
+
+    }
+
+
+    url_id = base64.urlsafe_b64encode(
+        url.encode()
+    ).decode().strip("=")
+
 
 
     endpoint = (
+
         f"https://www.virustotal.com/api/v3/urls/{url_id}"
+
     )
+
 
 
     response = requests.get(
+
         endpoint,
-        headers=headers
+
+        headers=headers,
+
+        timeout=10
+
     )
 
 
-    if response.status_code == 200:
-        data = response.json()
 
-        stats = (
+    if response.status_code == 200:
+
+
+        data=response.json()
+
+
+        stats=(
+
             data["data"]
+
             ["attributes"]
+
             ["last_analysis_stats"]
+
         )
+
 
         return stats
 
+
+
+    elif response.status_code == 404:
+
+        return "URL not found in VirusTotal database"
+
+
     else:
-        return "Unable to check VirusTotal"
+
+        return "VirusTotal scan failed"
 
 
 
@@ -129,17 +236,21 @@ def check_virustotal(url, api_key):
 # QR Code Scanner
 # -------------------------------
 
+st.subheader("📷 QR Code Scanner")
 
-st.subheader("📷 Upload QR Code")
 
 uploaded_file = st.file_uploader(
-    "Upload QR image",
+
+    "Upload QR Code Image",
+
     type=[
         "png",
         "jpg",
         "jpeg"
     ]
+
 )
+
 
 
 if uploaded_file:
@@ -147,15 +258,18 @@ if uploaded_file:
 
     image = Image.open(uploaded_file)
 
-    img_array = np.array(image)
+
+    img_array=np.array(image)
 
 
-    decoded = decode(img_array)
+    result=decode(img_array)
 
 
-    if decoded:
 
-        qr_data = decoded[0].data.decode(
+    if result:
+
+
+        qr_url=result[0].data.decode(
             "utf-8"
         )
 
@@ -166,26 +280,58 @@ if uploaded_file:
 
 
         st.write(
-            "Extracted URL:"
-        )
-
-        st.code(qr_data)
-
-
-        analysis = analyze_url(qr_data)
-
-
-        st.subheader(
-            "Threat Analysis"
+            "Extracted Data:"
         )
 
 
-        st.write(
-            analysis
-        )
+        st.code(qr_url)
+
+
+
+        if valid_url(qr_url):
+
+
+            analysis=analyze_url(qr_url)
+
+
+            st.subheader(
+                "🛡 Threat Analysis"
+            )
+
+
+            st.json(analysis)
+
+
+
+            if st.button(
+                "Check VirusTotal"
+            ):
+
+
+                vt=check_virustotal(
+                    qr_url
+                )
+
+
+                st.subheader(
+                    "VirusTotal Result"
+                )
+
+
+                st.write(vt)
+
+
+        else:
+
+
+            st.warning(
+                "QR does not contain a valid URL"
+            )
+
 
 
     else:
+
 
         st.warning(
             "No QR code detected"
@@ -194,52 +340,84 @@ if uploaded_file:
 
 
 # -------------------------------
-# Manual URL Checker
+# Manual URL Scanner
 # -------------------------------
 
 
 st.subheader("🌐 URL Scanner")
 
 
-url = st.text_input(
-    "Enter URL"
+url=st.text_input(
+    "Enter website URL"
 )
 
 
+
 if st.button(
-    "Analyze URL"
+    "Analyze Website"
 ):
 
-    if url:
 
-        result = analyze_url(url)
+    if not url:
+
+
+        st.error(
+            "Please enter a URL"
+        )
+
+
+    elif not valid_url(url):
+
+
+        st.error(
+            "Invalid URL format"
+        )
+
+
+    else:
+
+
+        result=analyze_url(url)
+
+
+        st.subheader(
+            "🛡 Local Threat Analysis"
+        )
+
 
         st.json(result)
 
 
-        api_key = st.text_input(
-            "VirusTotal API Key",
-            type="password"
-        )
+
+        if st.button(
+            "Run VirusTotal Scan"
+        ):
 
 
-        if api_key:
-
-            vt_result = check_virustotal(
-                url,
-                api_key
+            vt_result=check_virustotal(
+                url
             )
 
-            st.write(
-                "VirusTotal Result:"
+
+            st.subheader(
+                "🔍 VirusTotal Intelligence"
             )
+
 
             st.write(
                 vt_result
             )
 
-    else:
 
-        st.error(
-            "Enter a URL first"
-        )
+
+# -------------------------------
+# Footer
+# -------------------------------
+
+
+st.divider()
+
+
+st.caption(
+    "Cyber Threat Analyzer | QR Phishing Detection + URL Intelligence"
+)
