@@ -4,3 +4,4 @@ numpy
 requests
 pyzbar
 Pillow
+zbar-py
