@@ -17,3 +17,5 @@ A cybersecurity tool that analyzes QR codes, URLs, and suspicious links for phis
 - Streamlit
 - VirusTotal API
 - Cyber Threat Intelligence
+
+VirusTotal API integration requires API key configuration through Streamlit Secrets.
