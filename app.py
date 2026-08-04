@@ -43,7 +43,7 @@ def valid_url(url):
             result.netloc
         ])
 
-    except:
+    except Exception:
         return False
 
 
@@ -69,7 +69,8 @@ def analyze_url(url):
         "free",
         "gift",
         "confirm",
-        "signin"
+        "signin",
+        "payment"
     ]
 
 
@@ -89,7 +90,7 @@ def analyze_url(url):
         risk_score += 15
 
         reasons.append(
-            "Unusually long URL"
+            "Unusually long URL detected"
         )
 
 
@@ -125,23 +126,30 @@ def analyze_url(url):
 
     if risk_score >= 50:
 
-        risk="High"
+        risk_level = "High 🔴"
 
-    elif risk_score >=30:
+    elif risk_score >= 30:
 
-        risk="Medium"
+        risk_level = "Medium 🟡"
 
     else:
 
-        risk="Low"
+        risk_level = "Low 🟢"
 
+
+
+    if not reasons:
+
+        reasons.append(
+            "No suspicious indicators detected"
+        )
 
 
     return {
 
-        "Risk Level": risk,
+        "Risk Level": risk_level,
 
-        "Risk Score": risk_score,
+        "Risk Score": f"{risk_score}/100",
 
         "Reasons": reasons
 
@@ -161,7 +169,7 @@ def check_virustotal(url):
         api_key = st.secrets["VT_API_KEY"]
 
 
-    except:
+    except Exception:
 
         return "VirusTotal API Key not configured"
 
@@ -172,6 +180,7 @@ def check_virustotal(url):
         "x-apikey": api_key
 
     }
+
 
 
     url_id = base64.urlsafe_b64encode(
@@ -188,25 +197,32 @@ def check_virustotal(url):
 
 
 
-    response = requests.get(
+    try:
 
-        endpoint,
+        response = requests.get(
 
-        headers=headers,
+            endpoint,
 
-        timeout=10
+            headers=headers,
 
-    )
+            timeout=10
+
+        )
+
+
+    except requests.exceptions.RequestException:
+
+        return "Network error while contacting VirusTotal"
 
 
 
     if response.status_code == 200:
 
 
-        data=response.json()
+        data = response.json()
 
 
-        stats=(
+        stats = (
 
             data["data"]
 
@@ -226,9 +242,15 @@ def check_virustotal(url):
         return "URL not found in VirusTotal database"
 
 
+
     else:
 
-        return "VirusTotal scan failed"
+        return (
+
+            f"VirusTotal scan failed "
+            f"(Status: {response.status_code})"
+
+        )
 
 
 
@@ -259,23 +281,25 @@ if uploaded_file:
     image = Image.open(uploaded_file)
 
 
-    img_array=np.array(image)
+    img_array = np.array(
+        image.convert("L")
+    )
 
 
-    result=decode(img_array)
+    result = decode(img_array)
 
 
 
     if result:
 
 
-        qr_url=result[0].data.decode(
+        qr_url = result[0].data.decode(
             "utf-8"
         )
 
 
         st.success(
-            "QR Code Detected"
+            "QR Code Detected Successfully"
         )
 
 
@@ -291,34 +315,35 @@ if uploaded_file:
         if valid_url(qr_url):
 
 
-            analysis=analyze_url(qr_url)
+            qr_analysis = analyze_url(qr_url)
 
 
             st.subheader(
-                "🛡 Threat Analysis"
+                "🛡 QR Threat Analysis"
             )
 
 
-            st.json(analysis)
+            st.json(qr_analysis)
 
 
 
             if st.button(
-                "Check VirusTotal"
+                "Check QR URL with VirusTotal"
             ):
 
 
-                vt=check_virustotal(
+                vt_result = check_virustotal(
                     qr_url
                 )
 
 
                 st.subheader(
-                    "VirusTotal Result"
+                    "🔍 VirusTotal Intelligence"
                 )
 
 
-                st.write(vt)
+                st.write(vt_result)
+
 
 
         else:
@@ -343,11 +368,10 @@ if uploaded_file:
 # Manual URL Scanner
 # -------------------------------
 
-
 st.subheader("🌐 URL Scanner")
 
 
-url=st.text_input(
+url = st.text_input(
     "Enter website URL"
 )
 
@@ -370,50 +394,59 @@ if st.button(
 
 
         st.error(
-            "Invalid URL format"
+            "Invalid URL format. Example: https://example.com"
         )
 
 
     else:
 
 
-        result=analyze_url(url)
+        st.session_state["analyzed_url"] = url
 
 
-        st.subheader(
-            "🛡 Local Threat Analysis"
+
+if "analyzed_url" in st.session_state:
+
+
+    scanned_url = st.session_state["analyzed_url"]
+
+
+    result = analyze_url(
+        scanned_url
+    )
+
+
+    st.subheader(
+        "🛡 Local Threat Analysis"
+    )
+
+
+    st.json(result)
+
+
+
+    if st.button(
+        "Run VirusTotal Scan"
+    ):
+
+
+        vt_result = check_virustotal(
+            scanned_url
         )
 
 
-        st.json(result)
+        st.subheader(
+            "🔍 VirusTotal Intelligence"
+        )
 
 
-
-        if st.button(
-            "Run VirusTotal Scan"
-        ):
-
-
-            vt_result=check_virustotal(
-                url
-            )
-
-
-            st.subheader(
-                "🔍 VirusTotal Intelligence"
-            )
-
-
-            st.write(
-                vt_result
-            )
+        st.write(vt_result)
 
 
 
 # -------------------------------
 # Footer
 # -------------------------------
-
 
 st.divider()
 
