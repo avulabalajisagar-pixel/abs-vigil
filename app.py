@@ -222,6 +222,9 @@ def init_db():
 
 
 def save_scan(url, final_score, risk_level, confidence, details):
+    """Insert a new scan row and return its id, so a later update (e.g.
+    once Threat Intel finishes) can revise this same row instead of
+    creating a duplicate entry."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -235,6 +238,23 @@ def save_scan(url, final_score, risk_level, confidence, details):
             confidence,
             json.dumps(details)
         )
+    )
+    conn.commit()
+    scan_id = c.lastrowid
+    conn.close()
+    return scan_id
+
+
+def update_scan(scan_id, final_score, risk_level, confidence, details):
+    """Revise an existing scan row in place, used when Threat Intel
+    completes after the initial structure/domain result was already
+    saved — avoids a duplicate 'incomplete' entry in Scan History."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE scans SET final_score = ?, risk_level = ?, confidence = ?, details = ? "
+        "WHERE id = ?",
+        (final_score, risk_level, confidence, json.dumps(details), scan_id)
     )
     conn.commit()
     conn.close()
@@ -732,6 +752,14 @@ def render_full_report(url, source="manual"):
 
     final_score, risk_level, confidence = compute_final_score(structure_result, domain_result)
 
+    # Save immediately so a scan is never lost even if the user never
+    # clicks "Run Threat Intelligence Scan" — this row gets revised in
+    # place (not duplicated) if they do run it afterward.
+    scan_id = save_scan(
+        url, final_score, risk_level, confidence,
+        {"structure": structure_result, "domain": domain_result, "threat_intel": None}
+    )
+
     st.session_state["last_url"] = url
     st.session_state["last_source"] = source
     st.session_state["structure_result"] = structure_result
@@ -740,6 +768,7 @@ def render_full_report(url, source="manual"):
     st.session_state["final_score"] = final_score
     st.session_state["risk_level"] = risk_level
     st.session_state["confidence"] = confidence
+    st.session_state["current_scan_id"] = scan_id
 
 
 def display_report(source="manual"):
@@ -815,6 +844,19 @@ def display_report(source="manual"):
                 st.session_state["final_score"] = final_score
                 st.session_state["risk_level"] = risk_level
                 st.session_state["confidence"] = confidence
+
+                # Revise the existing history row in place instead of
+                # inserting a second row for the same scan.
+                scan_id = st.session_state.get("current_scan_id")
+                if scan_id is not None:
+                    update_scan(
+                        scan_id, final_score, risk_level, confidence,
+                        {
+                            "structure": structure_result,
+                            "domain": domain_result,
+                            "threat_intel": ti_result
+                        }
+                    )
                 st.rerun()
         else:
             vt = threat_intel_result["vt"]
@@ -842,21 +884,9 @@ def display_report(source="manual"):
             else:
                 st.write(f"- {gsb.get('reason', 'Unavailable')}")
 
-    # Save once (avoid duplicate rows on rerun from unrelated widget interaction)
-    save_key = f"saved_{url}_{final_score}_{'ti' if threat_intel_result else 'noti'}"
-    if not st.session_state.get(save_key):
-        save_scan(
-            url,
-            final_score,
-            risk_level,
-            confidence,
-            {
-                "structure": structure_result,
-                "domain": domain_result,
-                "threat_intel": threat_intel_result
-            }
-        )
-        st.session_state[save_key] = True
+    # Note: this scan was already saved to history when it was first
+    # computed in render_full_report(), and revised in place above if
+    # Threat Intel was run — no additional save needed here.
 
 
 # ---------------------------------
