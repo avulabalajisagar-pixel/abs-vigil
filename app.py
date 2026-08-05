@@ -48,107 +48,138 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-html, body, [class*="css"]  {
-    font-family: 'JetBrains Mono', 'Courier New', monospace !important;
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, sans-serif !important;
 }
 
 .stApp {
-    background: radial-gradient(circle at top left, #0a0f0d 0%, #000000 70%);
+    background: linear-gradient(180deg, #0b0f14 0%, #0e1420 100%);
 }
 
-/* Neon title glow */
+/* Titles */
 h1 {
-    color: #00ff9d !important;
-    text-shadow: 0 0 8px rgba(0,255,157,0.6), 0 0 18px rgba(0,255,157,0.3);
-    letter-spacing: 2px;
+    color: #e6edf3 !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.5px;
+}
+h1::before {
+    content: none;
+}
+h2, h3 {
+    color: #7dd3c0 !important;
+    font-weight: 600 !important;
 }
 
-h2, h3 {
-    color: #4dfff0 !important;
-    text-shadow: 0 0 6px rgba(77,255,240,0.35);
+/* Body text */
+p, li, span, label, .stMarkdown {
+    color: #c9d1d9;
 }
 
 /* Buttons */
 .stButton > button {
-    background-color: #0d1512;
-    color: #00ff9d;
-    border: 1px solid #00ff9d;
-    border-radius: 4px;
-    font-family: 'JetBrains Mono', monospace;
-    letter-spacing: 1px;
-    transition: all 0.2s ease-in-out;
-    box-shadow: 0 0 4px rgba(0,255,157,0.2);
+    background-color: #12181f;
+    color: #5eead4;
+    border: 1px solid #22303c;
+    border-radius: 6px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    padding: 0.5rem 1.1rem;
+    transition: all 0.15s ease-in-out;
 }
 .stButton > button:hover {
-    background-color: #00ff9d;
-    color: #000000;
-    box-shadow: 0 0 16px rgba(0,255,157,0.8);
-    border-color: #00ff9d;
+    background-color: #14b8a6;
+    color: #0b0f14;
+    border-color: #14b8a6;
 }
 
 /* Text input */
 .stTextInput > div > div > input {
-    background-color: #050a08;
-    color: #00ff9d;
-    border: 1px solid #1f4d3d;
+    background-color: #0d1117;
+    color: #e6edf3;
+    border: 1px solid #22303c;
+    border-radius: 6px;
     font-family: 'JetBrains Mono', monospace;
 }
 .stTextInput > div > div > input:focus {
-    border: 1px solid #00ff9d;
-    box-shadow: 0 0 8px rgba(0,255,157,0.4);
+    border: 1px solid #14b8a6;
+    box-shadow: 0 0 0 1px #14b8a6;
 }
 
-/* Metrics as terminal readouts */
-div[data-testid="stMetric"] {
-    background-color: #050a08;
-    border: 1px solid #1f4d3d;
-    border-radius: 6px;
-    padding: 10px 14px;
-    box-shadow: 0 0 10px rgba(0,255,157,0.08);
-}
-div[data-testid="stMetricValue"] {
-    color: #00ff9d;
-    text-shadow: 0 0 6px rgba(0,255,157,0.5);
-}
-
-/* Expanders as terminal panels */
+/* Expanders as clean panel cards */
 div[data-testid="stExpander"] {
-    background-color: #050a08;
-    border: 1px solid #1f4d3d;
-    border-radius: 6px;
+    background-color: #0d1117;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+}
+div[data-testid="stExpander"] summary {
+    color: #e6edf3;
+    font-weight: 600;
 }
 
 /* Code blocks */
 code {
-    color: #4dfff0 !important;
+    color: #7dd3c0 !important;
+    background-color: #131a22 !important;
 }
 
 /* Tabs */
 button[data-baseweb="tab"] {
-    font-family: 'JetBrains Mono', monospace;
-    color: #7fffd4;
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    color: #8b949e;
 }
 button[data-baseweb="tab"][aria-selected="true"] {
-    color: #00ff9d;
-    border-bottom: 2px solid #00ff9d !important;
+    color: #5eead4;
+    border-bottom: 2px solid #14b8a6 !important;
 }
 
 /* Progress bar */
 .stProgress > div > div > div > div {
-    background-color: #00ff9d;
-    box-shadow: 0 0 8px rgba(0,255,157,0.6);
+    background-color: #14b8a6;
 }
 
-/* Blinking cursor for the tagline */
-.blink-cursor::after {
-    content: "█";
-    animation: blink 1s step-start infinite;
-    color: #00ff9d;
+/* Terminal-style status line under the title */
+.status-line {
+    font-family: 'JetBrains Mono', monospace;
+    color: #5eead4;
+    font-size: 0.9rem;
+    opacity: 0.85;
+    margin-top: -8px;
 }
-@keyframes blink {
-    50% { opacity: 0; }
+.status-line .cursor::after {
+    content: "▌";
+    animation: blink 1.1s step-start infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* Custom risk badges (replace default st.metric where used) */
+.abs-metric-row {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 6px;
+}
+.abs-metric-card {
+    flex: 1;
+    background-color: #0d1117;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+.abs-metric-label {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.78rem;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 4px;
+}
+.abs-metric-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.5rem;
+    font-weight: 600;
+    white-space: nowrap;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -360,7 +391,15 @@ def check_domain_age(domain):
             return None, "Creation date unavailable"
         if isinstance(creation, str):
             return None, "Could not parse creation date"
-        age_days = (datetime.datetime.now() - creation).days
+
+        # Some WHOIS servers return timezone-aware datetimes, others
+        # naive ones. Normalize both to naive UTC before subtracting,
+        # otherwise Python raises "can't subtract offset-naive and
+        # offset-aware datetimes".
+        if creation.tzinfo is not None:
+            creation = creation.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+
+        age_days = (datetime.datetime.utcnow() - creation).days
         return age_days, w.registrar
     except Exception as e:
         return None, f"WHOIS lookup failed: {e}"
@@ -655,16 +694,16 @@ def run_scan_animation(label="TARGET"):
     for i, msg in enumerate(steps):
         pct = int(((i + 1) / len(steps)) * 100)
         placeholder.markdown(
-            f"<span style='color:#00ff9d;'>[{pct:3d}%]</span> "
-            f"<span style='color:#7fffd4;'>{msg}</span>",
+            f"<span style='font-family:JetBrains Mono, monospace; color:#14b8a6; font-weight:600;'>[{pct:3d}%]</span> "
+            f"<span style='font-family:JetBrains Mono, monospace; color:#8b949e;'>{msg}</span>",
             unsafe_allow_html=True
         )
         progress.progress(pct)
         time.sleep(0.22)
 
     placeholder.markdown(
-        f"<span style='color:#00ff9d;'>[100%]</span> "
-        f"<span style='color:#7fffd4;'>Scan sequence complete for {label}. Compiling report...</span>",
+        f"<span style='font-family:JetBrains Mono, monospace; color:#14b8a6; font-weight:600;'>[100%]</span> "
+        f"<span style='font-family:JetBrains Mono, monospace; color:#8b949e;'>Scan sequence complete for {label}. Compiling report...</span>",
         unsafe_allow_html=True
     )
     time.sleep(0.3)
@@ -707,9 +746,29 @@ def display_report():
     st.subheader("🛡️ ABS THREAT REPORT")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Risk Score", f"{final_score}/100")
-    c2.metric("Threat Level", risk_level)
-    c3.metric("Confidence", confidence)
+    risk_colors = {
+        "High Risk 🔴": "#f85149",
+        "Medium Risk 🟡": "#e3b341",
+        "Low Risk 🟢": "#3fb950",
+    }
+    score_color = risk_colors.get(risk_level, "#5eead4")
+
+    st.markdown(f"""
+    <div class="abs-metric-row">
+        <div class="abs-metric-card">
+            <div class="abs-metric-label">Risk Score</div>
+            <div class="abs-metric-value" style="color:{score_color};">{final_score}/100</div>
+        </div>
+        <div class="abs-metric-card">
+            <div class="abs-metric-label">Threat Level</div>
+            <div class="abs-metric-value" style="color:{score_color};">{risk_level}</div>
+        </div>
+        <div class="abs-metric-card">
+            <div class="abs-metric-label">Confidence</div>
+            <div class="abs-metric-value" style="color:#5eead4;">{confidence}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     with st.expander("🧩 URL Structure Analysis", expanded=True):
         st.write(f"Sub-score: {structure_result['score']}/100")
@@ -778,9 +837,7 @@ def display_report():
 
 st.title("🛡️ ABS VIGIL")
 st.markdown(
-    "<p style='color:#7fffd4; margin-top:-10px;'>"
-    "root@abs-vigil:~$ <span class='blink-cursor'></span>"
-    "</p>",
+    "<p class='status-line'>root@abs-vigil:~$ system armed and monitoring <span class='cursor'></span></p>",
     unsafe_allow_html=True
 )
 st.subheader("Advanced Behavioral Shield")
