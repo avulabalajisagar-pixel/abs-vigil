@@ -8,34 +8,40 @@ from pyzbar.pyzbar import decode
 from urllib.parse import urlparse
 
 
-# -------------------------------
-# Page Configuration
-# -------------------------------
+# ---------------------------------
+# ABS VIGIL Configuration
+# ---------------------------------
 
 st.set_page_config(
-    page_title="Cyber Threat Analyzer",
-    page_icon="🔐",
+    page_title="ABS VIGIL | Advanced Behavioral Shield",
+    page_icon="🛡️",
     layout="centered"
 )
 
 
-st.title("🔐 Cyber Threat Analyzer")
+st.title("🛡️ ABS VIGIL")
+
+st.subheader(
+    "Advanced Behavioral Shield"
+)
 
 st.write(
     """
-    Analyze QR codes and URLs for possible phishing,
-    malicious indicators, and threat intelligence.
+    An intelligent cybersecurity platform to analyze QR codes,
+    URLs, and suspicious links for phishing threats,
+    malicious indicators, and threat intelligence insights.
     """
 )
 
 
-# -------------------------------
+# ---------------------------------
 # URL Validation
-# -------------------------------
+# ---------------------------------
 
 def valid_url(url):
 
     try:
+
         result = urlparse(url)
 
         return all([
@@ -44,13 +50,14 @@ def valid_url(url):
         ])
 
     except Exception:
+
         return False
 
 
 
-# -------------------------------
-# Local URL Threat Analysis
-# -------------------------------
+# ---------------------------------
+# Local Threat Analysis Engine
+# ---------------------------------
 
 def analyze_url(url):
 
@@ -59,6 +66,7 @@ def analyze_url(url):
 
 
     suspicious_words = [
+
         "login",
         "verify",
         "update",
@@ -70,7 +78,10 @@ def analyze_url(url):
         "gift",
         "confirm",
         "signin",
-        "payment"
+        "payment",
+        "wallet",
+        "crypto"
+
     ]
 
 
@@ -85,6 +96,7 @@ def analyze_url(url):
             )
 
 
+
     if len(url) > 100:
 
         risk_score += 15
@@ -92,6 +104,7 @@ def analyze_url(url):
         reasons.append(
             "Unusually long URL detected"
         )
+
 
 
     if re.search(
@@ -102,8 +115,9 @@ def analyze_url(url):
         risk_score += 30
 
         reasons.append(
-            "URL contains direct IP address"
+            "Direct IP address detected instead of domain"
         )
+
 
 
     if "@" in url:
@@ -111,8 +125,9 @@ def analyze_url(url):
         risk_score += 25
 
         reasons.append(
-            "URL contains @ symbol (possible spoofing)"
+            "Possible URL spoofing using @ symbol"
         )
+
 
 
     if url.count("-") > 3:
@@ -124,17 +139,26 @@ def analyze_url(url):
         )
 
 
-    if risk_score >= 50:
 
-        risk_level = "High 🔴"
+    if risk_score > 100:
 
-    elif risk_score >= 30:
+        risk_score = 100
 
-        risk_level = "Medium 🟡"
+
+
+    if risk_score >= 70:
+
+        risk_level = "High Risk 🔴"
+
+
+    elif risk_score >= 40:
+
+        risk_level = "Medium Risk 🟡"
+
 
     else:
 
-        risk_level = "Low 🟢"
+        risk_level = "Low Risk 🟢"
 
 
 
@@ -145,21 +169,22 @@ def analyze_url(url):
         )
 
 
+
     return {
 
-        "Risk Level": risk_level,
+        "Threat Level": risk_level,
 
         "Risk Score": f"{risk_score}/100",
 
-        "Reasons": reasons
+        "Analysis": reasons
 
     }
 
 
 
-# -------------------------------
-# VirusTotal Integration
-# -------------------------------
+# ---------------------------------
+# VirusTotal Threat Intelligence
+# ---------------------------------
 
 def check_virustotal(url):
 
@@ -171,7 +196,7 @@ def check_virustotal(url):
 
     except Exception:
 
-        return "VirusTotal API Key not configured"
+        return "VirusTotal API key not configured"
 
 
 
@@ -212,7 +237,7 @@ def check_virustotal(url):
 
     except requests.exceptions.RequestException:
 
-        return "Network error while contacting VirusTotal"
+        return "Network error while connecting to VirusTotal"
 
 
 
@@ -225,9 +250,7 @@ def check_virustotal(url):
         stats = (
 
             data["data"]
-
             ["attributes"]
-
             ["last_analysis_stats"]
 
         )
@@ -247,18 +270,23 @@ def check_virustotal(url):
 
         return (
 
-            f"VirusTotal scan failed "
-            f"(Status: {response.status_code})"
+            f"VirusTotal request failed "
+            f"Status Code: {response.status_code}"
 
         )
 
 
 
-# -------------------------------
-# QR Code Scanner
-# -------------------------------
+# ---------------------------------
+# QR Code Security Scanner
+# ---------------------------------
 
-st.subheader("📷 QR Code Scanner")
+st.divider()
+
+st.subheader(
+    "📱 QR Code Threat Scanner"
+)
+
 
 
 uploaded_file = st.file_uploader(
@@ -278,7 +306,9 @@ uploaded_file = st.file_uploader(
 if uploaded_file:
 
 
-    image = Image.open(uploaded_file)
+    image = Image.open(
+        uploaded_file
+    )
 
 
     img_array = np.array(
@@ -286,20 +316,23 @@ if uploaded_file:
     )
 
 
-    result = decode(img_array)
+    result = decode(
+        img_array
+    )
 
 
 
     if result:
 
 
-        qr_url = result[0].data.decode(
+        qr_data = result[0].data.decode(
             "utf-8"
         )
 
 
+
         st.success(
-            "QR Code Detected Successfully"
+            "QR Code successfully decoded"
         )
 
 
@@ -308,41 +341,49 @@ if uploaded_file:
         )
 
 
-        st.code(qr_url)
+        st.code(
+            qr_data
+        )
 
 
 
-        if valid_url(qr_url):
+        if valid_url(qr_data):
 
 
-            qr_analysis = analyze_url(qr_url)
-
-
-            st.subheader(
-                "🛡 QR Threat Analysis"
+            qr_result = analyze_url(
+                qr_data
             )
 
 
-            st.json(qr_analysis)
+            st.subheader(
+                "🛡️ ABS VIGIL Analysis"
+            )
+
+
+            st.json(
+                qr_result
+            )
 
 
 
             if st.button(
-                "Check QR URL with VirusTotal"
+                "🔍 Scan QR URL with VirusTotal"
             ):
 
 
-                vt_result = check_virustotal(
-                    qr_url
+                vt = check_virustotal(
+                    qr_data
                 )
 
 
                 st.subheader(
-                    "🔍 VirusTotal Intelligence"
+                    "VirusTotal Intelligence"
                 )
 
 
-                st.write(vt_result)
+                st.write(
+                    vt
+                )
 
 
 
@@ -350,7 +391,7 @@ if uploaded_file:
 
 
             st.warning(
-                "QR does not contain a valid URL"
+                "QR code does not contain a valid URL"
             )
 
 
@@ -364,11 +405,17 @@ if uploaded_file:
 
 
 
-# -------------------------------
+# ---------------------------------
 # Manual URL Scanner
-# -------------------------------
+# ---------------------------------
 
-st.subheader("🌐 URL Scanner")
+st.divider()
+
+
+st.subheader(
+    "🌐 Website Threat Scanner"
+)
+
 
 
 url = st.text_input(
@@ -378,7 +425,7 @@ url = st.text_input(
 
 
 if st.button(
-    "Analyze Website"
+    "Analyze Threat"
 ):
 
 
@@ -390,43 +437,49 @@ if st.button(
         )
 
 
+
     elif not valid_url(url):
 
 
         st.error(
-            "Invalid URL format. Example: https://example.com"
+            "Invalid URL format"
         )
+
 
 
     else:
 
 
-        st.session_state["analyzed_url"] = url
+        st.session_state["url"] = url
 
 
 
-if "analyzed_url" in st.session_state:
+if "url" in st.session_state:
 
 
-    scanned_url = st.session_state["analyzed_url"]
+    scanned_url = st.session_state["url"]
 
 
-    result = analyze_url(
+
+    analysis = analyze_url(
         scanned_url
     )
 
 
+
     st.subheader(
-        "🛡 Local Threat Analysis"
+        "🛡️ Behavioral Threat Analysis"
     )
 
 
-    st.json(result)
+    st.json(
+        analysis
+    )
 
 
 
     if st.button(
-        "Run VirusTotal Scan"
+        "🔍 Run VirusTotal Intelligence Scan"
     ):
 
 
@@ -436,21 +489,23 @@ if "analyzed_url" in st.session_state:
 
 
         st.subheader(
-            "🔍 VirusTotal Intelligence"
+            "VirusTotal Results"
         )
 
 
-        st.write(vt_result)
+        st.write(
+            vt_result
+        )
 
 
 
-# -------------------------------
+# ---------------------------------
 # Footer
-# -------------------------------
+# ---------------------------------
 
 st.divider()
 
 
 st.caption(
-    "Cyber Threat Analyzer | QR Phishing Detection + URL Intelligence"
+    "🛡️ ABS VIGIL | Advanced Behavioral Shield | Cyber Threat Intelligence Platform"
 )
