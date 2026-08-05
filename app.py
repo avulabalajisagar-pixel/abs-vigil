@@ -9,6 +9,8 @@ import socket
 import ssl
 import math
 import datetime
+import time
+import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 from pyzbar.pyzbar import decode
@@ -39,6 +41,117 @@ st.set_page_config(
     page_icon="🛡️",
     layout="centered"
 )
+
+# ---------------------------------
+# Terminal / Hacker Theme
+# ---------------------------------
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+html, body, [class*="css"]  {
+    font-family: 'JetBrains Mono', 'Courier New', monospace !important;
+}
+
+.stApp {
+    background: radial-gradient(circle at top left, #0a0f0d 0%, #000000 70%);
+}
+
+/* Neon title glow */
+h1 {
+    color: #00ff9d !important;
+    text-shadow: 0 0 8px rgba(0,255,157,0.6), 0 0 18px rgba(0,255,157,0.3);
+    letter-spacing: 2px;
+}
+
+h2, h3 {
+    color: #4dfff0 !important;
+    text-shadow: 0 0 6px rgba(77,255,240,0.35);
+}
+
+/* Buttons */
+.stButton > button {
+    background-color: #0d1512;
+    color: #00ff9d;
+    border: 1px solid #00ff9d;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 1px;
+    transition: all 0.2s ease-in-out;
+    box-shadow: 0 0 4px rgba(0,255,157,0.2);
+}
+.stButton > button:hover {
+    background-color: #00ff9d;
+    color: #000000;
+    box-shadow: 0 0 16px rgba(0,255,157,0.8);
+    border-color: #00ff9d;
+}
+
+/* Text input */
+.stTextInput > div > div > input {
+    background-color: #050a08;
+    color: #00ff9d;
+    border: 1px solid #1f4d3d;
+    font-family: 'JetBrains Mono', monospace;
+}
+.stTextInput > div > div > input:focus {
+    border: 1px solid #00ff9d;
+    box-shadow: 0 0 8px rgba(0,255,157,0.4);
+}
+
+/* Metrics as terminal readouts */
+div[data-testid="stMetric"] {
+    background-color: #050a08;
+    border: 1px solid #1f4d3d;
+    border-radius: 6px;
+    padding: 10px 14px;
+    box-shadow: 0 0 10px rgba(0,255,157,0.08);
+}
+div[data-testid="stMetricValue"] {
+    color: #00ff9d;
+    text-shadow: 0 0 6px rgba(0,255,157,0.5);
+}
+
+/* Expanders as terminal panels */
+div[data-testid="stExpander"] {
+    background-color: #050a08;
+    border: 1px solid #1f4d3d;
+    border-radius: 6px;
+}
+
+/* Code blocks */
+code {
+    color: #4dfff0 !important;
+}
+
+/* Tabs */
+button[data-baseweb="tab"] {
+    font-family: 'JetBrains Mono', monospace;
+    color: #7fffd4;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: #00ff9d;
+    border-bottom: 2px solid #00ff9d !important;
+}
+
+/* Progress bar */
+.stProgress > div > div > div > div {
+    background-color: #00ff9d;
+    box-shadow: 0 0 8px rgba(0,255,157,0.6);
+}
+
+/* Blinking cursor for the tagline */
+.blink-cursor::after {
+    content: "█";
+    animation: blink 1s step-start infinite;
+    color: #00ff9d;
+}
+@keyframes blink {
+    50% { opacity: 0; }
+}
+</style>
+""", unsafe_allow_html=True)
 
 DB_PATH = "abs_vigil_history.db"
 
@@ -448,19 +561,30 @@ def run_threat_intel(url):
         gsb = gsb_future.result()
 
     scores = []
-    if vt.get("available") and "score" in vt:
-        scores.append(vt["score"])
-    elif "score" in vt:
+    if "score" in vt:
         scores.append(vt["score"])
     if gsb.get("available"):
         scores.append(gsb["score"])
 
-    combined_score = int(np.mean(scores)) if scores else None
+    # Use the HIGHEST score among sources, not the average. If even one
+    # reputable source (VT or GSB) flags a URL as malicious, that's a
+    # strong signal on its own — averaging it against a source that found
+    # nothing wrongly dilutes a confirmed threat down to "looks fine".
+    combined_score = max(scores) if scores else None
+
+    # Hard flag: if a source explicitly confirms malicious intent, don't
+    # let domain/URL-structure heuristics water this down at all.
+    explicitly_flagged = (
+        gsb.get("available") and gsb.get("flagged")
+    ) or (
+        vt.get("available") and vt.get("stats", {}).get("malicious", 0) > 0
+    )
 
     return {
         "vt": vt,
         "gsb": gsb,
-        "score": combined_score
+        "score": combined_score,
+        "explicitly_flagged": explicitly_flagged
     }
 
 
@@ -482,6 +606,13 @@ def compute_final_score(structure_result, domain_result, threat_intel_result=Non
     final_score = int(weighted_sum / total_weight) if total_weight > 0 else 0
     final_score = min(final_score, 100)
 
+    # Hard override: a confirmed hit from VirusTotal or Google Safe
+    # Browsing is direct evidence, not a heuristic guess like the other
+    # two branches. Don't let a clean domain/URL-structure score water
+    # down a confirmed malicious verdict.
+    if threat_intel_result and threat_intel_result.get("explicitly_flagged"):
+        final_score = max(final_score, 85)
+
     confidence = "High" if "threat_intel" in components else "Medium"
 
     if final_score >= 70:
@@ -498,11 +629,56 @@ def compute_final_score(structure_result, domain_result, threat_intel_result=Non
 # UI Rendering Helpers
 # ---------------------------------
 
+SCAN_FLAVOR_MESSAGES = [
+    "🛰️  Establishing secure uplink to threat intelligence grid...",
+    "🌐  Cross-referencing global malware signature databases...",
+    "🧬  Fingerprinting domain infrastructure...",
+    "📡  Querying WHOIS registries across regional nodes...",
+    "🔐  Validating SSL/TLS certificate chain of trust...",
+    "🕵️  Scanning for homograph and lookalike domain patterns...",
+    "📊  Aggregating multi-engine reputation scores...",
+    "🧠  Running behavioral risk heuristics...",
+]
+
+
+def run_scan_animation(label="TARGET"):
+    """
+    Cosmetic scan sequence — purely visual flavor to match the tool's
+    theme. The REAL analysis (WHOIS/DNS/SSL/URL-structure) runs
+    separately, right after this. This just makes the wait feel like
+    a proper security-terminal scan instead of a bare spinner.
+    """
+    placeholder = st.empty()
+    progress = st.progress(0)
+    steps = random.sample(SCAN_FLAVOR_MESSAGES, k=5)
+
+    for i, msg in enumerate(steps):
+        pct = int(((i + 1) / len(steps)) * 100)
+        placeholder.markdown(
+            f"<span style='color:#00ff9d;'>[{pct:3d}%]</span> "
+            f"<span style='color:#7fffd4;'>{msg}</span>",
+            unsafe_allow_html=True
+        )
+        progress.progress(pct)
+        time.sleep(0.22)
+
+    placeholder.markdown(
+        f"<span style='color:#00ff9d;'>[100%]</span> "
+        f"<span style='color:#7fffd4;'>Scan sequence complete for {label}. Compiling report...</span>",
+        unsafe_allow_html=True
+    )
+    time.sleep(0.3)
+    placeholder.empty()
+    progress.empty()
+
+
 def render_full_report(url):
-    with st.spinner("Analyzing URL structure..."):
+    run_scan_animation(label=url[:40])
+
+    with st.spinner("Parsing URL structure and encoding patterns..."):
         structure_result = analyze_url_structure(url)
 
-    with st.spinner("Analyzing domain (WHOIS / SSL / DNS)..."):
+    with st.spinner("Resolving domain fingerprint (WHOIS / SSL / DNS)..."):
         domain_result = analyze_domain(url)
 
     final_score, risk_level, confidence = compute_final_score(structure_result, domain_result)
@@ -553,7 +729,7 @@ def display_report():
         if threat_intel_result is None:
             st.info("Not yet run — click below to query VirusTotal + Google Safe Browsing.")
             if st.button("🔍 Run Threat Intelligence Scan", key="ti_btn"):
-                with st.spinner("Querying VirusTotal and Google Safe Browsing..."):
+                with st.spinner("Dispatching payload to VirusTotal + Google Safe Browsing networks..."):
                     ti_result = run_threat_intel(url)
                 st.session_state["threat_intel_result"] = ti_result
                 final_score, risk_level, confidence = compute_final_score(
@@ -601,6 +777,12 @@ def display_report():
 # ---------------------------------
 
 st.title("🛡️ ABS VIGIL")
+st.markdown(
+    "<p style='color:#7fffd4; margin-top:-10px;'>"
+    "root@abs-vigil:~$ <span class='blink-cursor'></span>"
+    "</p>",
+    unsafe_allow_html=True
+)
 st.subheader("Advanced Behavioral Shield")
 st.write(
     """
