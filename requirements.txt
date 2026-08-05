@@ -1,7 +1,8 @@
 streamlit
-opencv-python-headless
 numpy
 requests
-pyzbar
 Pillow
-
+pyzbar
+python-whois
+dnspython
+tldextract
