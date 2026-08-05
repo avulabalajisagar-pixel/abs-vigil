@@ -721,7 +721,7 @@ def run_scan_animation(label="TARGET"):
     progress.empty()
 
 
-def render_full_report(url):
+def render_full_report(url, source="manual"):
     run_scan_animation(label=url[:40])
 
     with st.spinner("Parsing URL structure and encoding patterns..."):
@@ -733,6 +733,7 @@ def render_full_report(url):
     final_score, risk_level, confidence = compute_final_score(structure_result, domain_result)
 
     st.session_state["last_url"] = url
+    st.session_state["last_source"] = source
     st.session_state["structure_result"] = structure_result
     st.session_state["domain_result"] = domain_result
     st.session_state["threat_intel_result"] = None
@@ -741,7 +742,14 @@ def render_full_report(url):
     st.session_state["confidence"] = confidence
 
 
-def display_report():
+def display_report(source="manual"):
+    # Streamlit executes the code inside every tab on every rerun, not
+    # just the visible one. If both tabs called this unconditionally,
+    # they'd both try to create a button with the same key in the same
+    # run and crash with StreamlitDuplicateElementKey. Only render in
+    # the tab that actually produced the current result.
+    if st.session_state.get("last_source") != source:
+        return
     if "last_url" not in st.session_state:
         return
 
@@ -797,7 +805,7 @@ def display_report():
     with st.expander("🔎 Threat Intelligence", expanded=True):
         if threat_intel_result is None:
             st.info("Not yet run — click below to query VirusTotal + Google Safe Browsing.")
-            if st.button("🔍 Run Threat Intelligence Scan", key="ti_btn"):
+            if st.button("🔍 Run Threat Intelligence Scan", key=f"ti_btn_{source}"):
                 with st.spinner("Dispatching payload to VirusTotal + Google Safe Browsing networks..."):
                     ti_result = run_threat_intel(url)
                 st.session_state["threat_intel_result"] = ti_result
@@ -883,9 +891,9 @@ with tab_scan:
         elif not valid_url(url_input):
             st.error("Invalid URL format")
         else:
-            render_full_report(url_input)
+            render_full_report(url_input, source="manual")
 
-    display_report()
+    display_report(source="manual")
 
 with tab_qr:
     st.write("Upload a QR code image to extract and analyze its embedded URL.")
@@ -907,8 +915,8 @@ with tab_qr:
 
             if valid_url(qr_data):
                 if st.button("Analyze QR URL", key="qr_analyze_btn"):
-                    render_full_report(qr_data)
-                display_report()
+                    render_full_report(qr_data, source="qr")
+                display_report(source="qr")
             else:
                 st.warning("QR code does not contain a valid URL")
         else:
