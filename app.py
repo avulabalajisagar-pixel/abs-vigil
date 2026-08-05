@@ -611,19 +611,29 @@ def run_threat_intel(url):
     # nothing wrongly dilutes a confirmed threat down to "looks fine".
     combined_score = max(scores) if scores else None
 
-    # Hard flag: if a source explicitly confirms malicious intent, don't
-    # let domain/URL-structure heuristics water this down at all.
+    # Hard override flag: only trip this for sources with genuinely low
+    # false-positive rates. VirusTotal aggregates ~70-90 antivirus engines,
+    # and it's common for 1-2 low-quality/noisy engines to flag even
+    # completely legitimate, high-traffic domains — that's not a real
+    # verdict, it's engine noise. Require a real multi-engine consensus
+    # before trusting VT as "confirmed malicious". Google Safe Browsing
+    # is a hand-curated list rather than a multi-vendor vote, so a single
+    # GSB match is trustworthy enough to trigger on its own.
+    MIN_VT_CONSENSUS = 3
+    vt_malicious_count = vt.get("stats", {}).get("malicious", 0) if vt.get("available") else 0
+
     explicitly_flagged = (
         gsb.get("available") and gsb.get("flagged")
     ) or (
-        vt.get("available") and vt.get("stats", {}).get("malicious", 0) > 0
+        vt_malicious_count >= MIN_VT_CONSENSUS
     )
 
     return {
         "vt": vt,
         "gsb": gsb,
         "score": combined_score,
-        "explicitly_flagged": explicitly_flagged
+        "explicitly_flagged": explicitly_flagged,
+        "vt_malicious_count": vt_malicious_count
     }
 
 
@@ -804,6 +814,16 @@ def display_report():
 
             st.write("**VirusTotal**")
             if vt.get("available") and "stats" in vt:
+                mal_count = threat_intel_result.get("vt_malicious_count", 0)
+                if mal_count == 0:
+                    st.write("✅ 0 engines flagged this URL as malicious")
+                elif mal_count < 3:
+                    st.write(
+                        f"⚠️ {mal_count} engine(s) flagged this URL — below the 3-engine "
+                        "consensus threshold, treated as noise rather than a confirmed threat"
+                    )
+                else:
+                    st.write(f"🔴 {mal_count} engines flagged this URL — confirmed threat")
                 st.json(vt["stats"])
             else:
                 st.write(f"- {vt.get('reason', 'Unavailable')}")
