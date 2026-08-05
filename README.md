@@ -72,7 +72,8 @@ To configure:
 
 🚀 Streamlit App:
 
-https://cyber-threat-analyzer-5dkna8d7wvyhdjggpimghp.streamlit.app/
+
+https://abs-vigil.streamlit.app/
 
 ---
 
