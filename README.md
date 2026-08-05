@@ -1,4 +1,6 @@
-# Cyber Threat Analyzer
+# ABS VIGIL
+
+## Advanced Behavioral Shield
 
 A cybersecurity tool that analyzes QR codes, URLs, and suspicious links for phishing threats.
 
