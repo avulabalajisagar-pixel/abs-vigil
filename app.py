@@ -3,9 +3,31 @@ import numpy as np
 import requests
 import re
 import base64
+import sqlite3
+import json
+import socket
+import ssl
+import math
+import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from PIL import Image
 from pyzbar.pyzbar import decode
 from urllib.parse import urlparse
+
+try:
+    import whois as whois_lib
+except ImportError:
+    whois_lib = None
+
+try:
+    import dns.resolver
+except ImportError:
+    dns = None
+
+try:
+    import tldextract
+except ImportError:
+    tldextract = None
 
 
 # ---------------------------------
@@ -18,20 +40,84 @@ st.set_page_config(
     layout="centered"
 )
 
+DB_PATH = "abs_vigil_history.db"
 
-st.title("🛡️ ABS VIGIL")
+KNOWN_SHORTENERS = {
+    "bit.ly", "tinyurl.com", "goo.gl", "t.co", "ow.ly", "is.gd",
+    "buff.ly", "tiny.cc", "rebrand.ly", "shorte.st", "cutt.ly",
+    "rb.gy", "shorturl.at", "v.gd", "s.id"
+}
 
-st.subheader(
-    "Advanced Behavioral Shield"
-)
+SUSPICIOUS_WORDS = [
+    "login", "verify", "update", "secure", "account", "bank",
+    "password", "free", "gift", "confirm", "signin", "payment",
+    "wallet", "crypto"
+]
 
-st.write(
-    """
-    An intelligent cybersecurity platform to analyze QR codes,
-    URLs, and suspicious links for phishing threats,
-    malicious indicators, and threat intelligence insights.
-    """
-)
+
+# ---------------------------------
+# Database Layer
+# ---------------------------------
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS scans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            url TEXT,
+            final_score INTEGER,
+            risk_level TEXT,
+            confidence TEXT,
+            details TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def save_scan(url, final_score, risk_level, confidence, details):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO scans (timestamp, url, final_score, risk_level, confidence, details) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            url,
+            final_score,
+            risk_level,
+            confidence,
+            json.dumps(details)
+        )
+    )
+    conn.commit()
+    conn.close()
+
+
+def load_history(limit=100):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT timestamp, url, final_score, risk_level, confidence FROM scans "
+        "ORDER BY id DESC LIMIT ?",
+        (limit,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def clear_history():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM scans")
+    conn.commit()
+    conn.close()
+
+
+init_db()
 
 
 # ---------------------------------
@@ -39,473 +125,562 @@ st.write(
 # ---------------------------------
 
 def valid_url(url):
-
     try:
-
         result = urlparse(url)
-
-        return all([
-            result.scheme in ["http", "https"],
-            result.netloc
-        ])
-
+        return all([result.scheme in ["http", "https"], result.netloc])
     except Exception:
-
         return False
 
 
-
 # ---------------------------------
-# Local Threat Analysis Engine
+# Branch 1: URL Structure Analysis
 # ---------------------------------
 
-def analyze_url(url):
+def shannon_entropy(s):
+    if not s:
+        return 0
+    prob = [s.count(c) / len(s) for c in set(s)]
+    return -sum(p * math.log2(p) for p in prob)
 
-    risk_score = 0
+
+def resolve_redirect_chain(url, max_hops=5):
+    chain = [url]
+    current = url
+    try:
+        for _ in range(max_hops):
+            resp = requests.head(current, allow_redirects=False, timeout=5)
+            if resp.status_code in (301, 302, 303, 307, 308) and "Location" in resp.headers:
+                next_url = resp.headers["Location"]
+                chain.append(next_url)
+                current = next_url
+            else:
+                break
+    except requests.exceptions.RequestException:
+        pass
+    return chain
+
+
+def analyze_url_structure(url):
+    score = 0
     reasons = []
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower()
 
-
-    suspicious_words = [
-
-        "login",
-        "verify",
-        "update",
-        "secure",
-        "account",
-        "bank",
-        "password",
-        "free",
-        "gift",
-        "confirm",
-        "signin",
-        "payment",
-        "wallet",
-        "crypto"
-
-    ]
-
-
-    for word in suspicious_words:
-
+    for word in SUSPICIOUS_WORDS:
         if word in url.lower():
-
-            risk_score += 10
-
-            reasons.append(
-                f"Suspicious keyword detected: {word}"
-            )
-
-
+            score += 8
+            reasons.append(f"Suspicious keyword detected: '{word}'")
 
     if len(url) > 100:
+        score += 12
+        reasons.append("Unusually long URL")
 
-        risk_score += 15
-
-        reasons.append(
-            "Unusually long URL detected"
-        )
-
-
-
-    if re.search(
-        r"\d+\.\d+\.\d+\.\d+",
-        url
-    ):
-
-        risk_score += 30
-
-        reasons.append(
-            "Direct IP address detected instead of domain"
-        )
-
-
+    if re.search(r"\d+\.\d+\.\d+\.\d+", url):
+        score += 25
+        reasons.append("Direct IP address used instead of domain")
 
     if "@" in url:
-
-        risk_score += 25
-
-        reasons.append(
-            "Possible URL spoofing using @ symbol"
-        )
-
-
+        score += 20
+        reasons.append("Possible spoofing using '@' symbol")
 
     if url.count("-") > 3:
+        score += 8
+        reasons.append("Excessive hyphens in URL")
 
-        risk_score += 10
+    # Punycode / homograph detection
+    if "xn--" in domain:
+        score += 25
+        reasons.append("Punycode domain detected (possible homograph/lookalike attack)")
 
-        reasons.append(
-            "Multiple hyphens detected"
-        )
+    # Subdomain depth
+    subdomain_depth = domain.count(".")
+    if subdomain_depth > 3:
+        score += 10
+        reasons.append(f"Unusually deep subdomain structure ({subdomain_depth} levels)")
 
+    # Shortener detection
+    root_domain = domain.split(":")[0]
+    if root_domain in KNOWN_SHORTENERS:
+        score += 15
+        reasons.append(f"Known URL shortener detected: {root_domain}")
 
+    # Entropy (randomness of domain name — DGA-style domains score high)
+    domain_label = root_domain.split(".")[0]
+    entropy = shannon_entropy(domain_label)
+    if entropy > 3.8 and len(domain_label) > 8:
+        score += 15
+        reasons.append(f"High domain entropy ({entropy:.2f}) — possibly auto-generated")
 
-    if risk_score > 100:
+    # Redirect chain
+    redirect_chain = []
+    if root_domain in KNOWN_SHORTENERS:
+        redirect_chain = resolve_redirect_chain(url)
+        if len(redirect_chain) > 1:
+            reasons.append(f"URL redirects {len(redirect_chain) - 1} time(s) before final destination")
+            score += 5 * (len(redirect_chain) - 1)
 
-        risk_score = 100
-
-
-
-    if risk_score >= 70:
-
-        risk_level = "High Risk 🔴"
-
-
-    elif risk_score >= 40:
-
-        risk_level = "Medium Risk 🟡"
-
-
-    else:
-
-        risk_level = "Low Risk 🟢"
-
-
+    score = min(score, 100)
 
     if not reasons:
-
-        reasons.append(
-            "No suspicious indicators detected"
-        )
-
-
+        reasons.append("No structural red flags detected")
 
     return {
-
-        "Threat Level": risk_level,
-
-        "Risk Score": f"{risk_score}/100",
-
-        "Analysis": reasons
-
+        "score": score,
+        "reasons": reasons,
+        "redirect_chain": redirect_chain
     }
 
 
-
 # ---------------------------------
-# VirusTotal Threat Intelligence
+# Branch 2: Domain Analysis
 # ---------------------------------
 
-def check_virustotal(url):
-
-
+def check_domain_age(domain):
+    if whois_lib is None:
+        return None, "python-whois not installed"
     try:
+        w = whois_lib.whois(domain)
+        creation = w.creation_date
+        if isinstance(creation, list):
+            creation = creation[0]
+        if creation is None:
+            return None, "Creation date unavailable"
+        if isinstance(creation, str):
+            return None, "Could not parse creation date"
+        age_days = (datetime.datetime.now() - creation).days
+        return age_days, w.registrar
+    except Exception as e:
+        return None, f"WHOIS lookup failed: {e}"
 
-        api_key = st.secrets["VT_API_KEY"]
+
+def check_ssl_certificate(domain):
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((domain, 443), timeout=5) as sock:
+            with ctx.wrap_socket(sock, server_hostname=domain) as ssock:
+                cert = ssock.getpeercert()
+                not_after = cert.get("notAfter")
+                expiry = datetime.datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+                days_left = (expiry - datetime.datetime.now()).days
+                issuer = dict(x[0] for x in cert.get("issuer", []))
+                return {
+                    "valid": True,
+                    "days_until_expiry": days_left,
+                    "issuer": issuer.get("organizationName", "Unknown")
+                }
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
 
 
+def check_dns_resolves(domain):
+    try:
+        socket.gethostbyname(domain)
+        return True
     except Exception:
-
-        return "VirusTotal API key not configured"
-
+        return False
 
 
-    headers = {
+def analyze_domain(url):
+    score = 0
+    reasons = []
+    details = {}
 
-        "x-apikey": api_key
+    parsed = urlparse(url)
+    netloc = parsed.netloc.split(":")[0]
 
+    if tldextract:
+        ext = tldextract.extract(url)
+        domain = f"{ext.domain}.{ext.suffix}"
+    else:
+        domain = netloc
+
+    # Run DNS, WHOIS, and SSL checks concurrently — all three are
+    # independent network calls, so there's no reason to wait on them
+    # one after another. SSL will simply fail gracefully if DNS can't
+    # resolve, so it's safe to fire alongside the DNS check.
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(check_dns_resolves, netloc): "dns",
+            executor.submit(check_domain_age, domain): "whois",
+            executor.submit(check_ssl_certificate, netloc): "ssl",
+        }
+        results = {}
+        for future in as_completed(futures):
+            label = futures[future]
+            try:
+                results[label] = future.result()
+            except Exception as e:
+                results[label] = e
+
+    # DNS resolution
+    resolves = results.get("dns")
+    if isinstance(resolves, Exception):
+        resolves = False
+    details["dns_resolves"] = resolves
+    if not resolves:
+        score += 30
+        reasons.append("Domain does not resolve via DNS")
+
+    # WHOIS domain age
+    whois_result = results.get("whois")
+    if isinstance(whois_result, Exception):
+        age_days, registrar_or_error = None, f"WHOIS lookup failed: {whois_result}"
+    else:
+        age_days, registrar_or_error = whois_result
+    details["domain_age_days"] = age_days
+    details["registrar_info"] = registrar_or_error
+    if age_days is not None:
+        if age_days < 30:
+            score += 30
+            reasons.append(f"Domain registered very recently ({age_days} days ago)")
+        elif age_days < 180:
+            score += 15
+            reasons.append(f"Domain is relatively new ({age_days} days old)")
+        else:
+            reasons.append(f"Domain age: {age_days} days (established)")
+    else:
+        reasons.append(f"Domain age unknown ({registrar_or_error})")
+
+    # SSL certificate
+    ssl_info = results.get("ssl")
+    if isinstance(ssl_info, Exception):
+        ssl_info = {"valid": False, "error": str(ssl_info)}
+    details["ssl"] = ssl_info
+    if resolves:
+        if not ssl_info.get("valid"):
+            score += 20
+            reasons.append("No valid SSL certificate found")
+        elif ssl_info.get("days_until_expiry", 0) < 0:
+            score += 15
+            reasons.append("SSL certificate has expired")
+        else:
+            reasons.append(f"Valid SSL certificate (issuer: {ssl_info.get('issuer')})")
+
+    score = min(score, 100)
+
+    return {
+        "score": score,
+        "reasons": reasons,
+        "details": details
     }
 
 
+# ---------------------------------
+# Branch 3: Threat Intelligence
+# ---------------------------------
 
-    url_id = base64.urlsafe_b64encode(
-        url.encode()
-    ).decode().strip("=")
+@st.cache_data(ttl=600, show_spinner=False)
+def check_virustotal(url):
+    try:
+        api_key = st.secrets["VT_API_KEY"]
+    except Exception:
+        return {"available": False, "reason": "VirusTotal API key not configured"}
 
-
-
-    endpoint = (
-
-        f"https://www.virustotal.com/api/v3/urls/{url_id}"
-
-    )
-
-
+    headers = {"x-apikey": api_key}
+    url_id = base64.urlsafe_b64encode(url.encode()).decode().strip("=")
+    endpoint = f"https://www.virustotal.com/api/v3/urls/{url_id}"
 
     try:
-
-        response = requests.get(
-
-            endpoint,
-
-            headers=headers,
-
-            timeout=10
-
-        )
-
-
-    except requests.exceptions.RequestException:
-
-        return "Network error while connecting to VirusTotal"
-
-
+        response = requests.get(endpoint, headers=headers, timeout=10)
+    except requests.exceptions.RequestException as e:
+        return {"available": False, "reason": f"Network error: {e}"}
 
     if response.status_code == 200:
-
-
         data = response.json()
-
-
-        stats = (
-
-            data["data"]
-            ["attributes"]
-            ["last_analysis_stats"]
-
-        )
-
-
-        return stats
-
-
-
+        stats = data["data"]["attributes"]["last_analysis_stats"]
+        malicious = stats.get("malicious", 0)
+        suspicious = stats.get("suspicious", 0)
+        total = sum(stats.values()) or 1
+        vt_score = min(100, int(((malicious * 2 + suspicious) / total) * 100))
+        return {"available": True, "stats": stats, "score": vt_score}
     elif response.status_code == 404:
-
-        return "URL not found in VirusTotal database"
-
-
-
+        return {"available": False, "reason": "URL not found in VirusTotal database", "score": 0}
     else:
+        return {"available": False, "reason": f"Request failed (status {response.status_code})"}
 
-        return (
 
-            f"VirusTotal request failed "
-            f"Status Code: {response.status_code}"
+@st.cache_data(ttl=600, show_spinner=False)
+def check_google_safe_browsing(url):
+    try:
+        api_key = st.secrets["GSB_API_KEY"]
+    except Exception:
+        return {"available": False, "reason": "Google Safe Browsing API key not configured"}
 
-        )
+    endpoint = f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={api_key}"
+    payload = {
+        "client": {"clientId": "abs-vigil", "clientVersion": "2.0"},
+        "threatInfo": {
+            "threatTypes": [
+                "MALWARE", "SOCIAL_ENGINEERING",
+                "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"
+            ],
+            "platformTypes": ["ANY_PLATFORM"],
+            "threatEntryTypes": ["URL"],
+            "threatEntries": [{"url": url}]
+        }
+    }
 
+    try:
+        response = requests.post(endpoint, json=payload, timeout=10)
+    except requests.exceptions.RequestException as e:
+        return {"available": False, "reason": f"Network error: {e}"}
+
+    if response.status_code == 200:
+        data = response.json()
+        matches = data.get("matches", [])
+        return {
+            "available": True,
+            "flagged": len(matches) > 0,
+            "matches": matches,
+            "score": 100 if matches else 0
+        }
+    else:
+        return {"available": False, "reason": f"Request failed (status {response.status_code})"}
+
+
+def run_threat_intel(url):
+    # VT and GSB are independent HTTP calls to different services —
+    # run them concurrently instead of waiting on VT before starting GSB.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        vt_future = executor.submit(check_virustotal, url)
+        gsb_future = executor.submit(check_google_safe_browsing, url)
+        vt = vt_future.result()
+        gsb = gsb_future.result()
+
+    scores = []
+    if vt.get("available") and "score" in vt:
+        scores.append(vt["score"])
+    elif "score" in vt:
+        scores.append(vt["score"])
+    if gsb.get("available"):
+        scores.append(gsb["score"])
+
+    combined_score = int(np.mean(scores)) if scores else None
+
+    return {
+        "vt": vt,
+        "gsb": gsb,
+        "score": combined_score
+    }
 
 
 # ---------------------------------
-# QR Code Security Scanner
+# Risk Scoring Engine (weighted, adaptive)
 # ---------------------------------
 
-st.divider()
+def compute_final_score(structure_result, domain_result, threat_intel_result=None):
+    components = {
+        "url_structure": (structure_result["score"], 0.25),
+        "domain": (domain_result["score"], 0.35),
+    }
 
-st.subheader(
-    "📱 QR Code Threat Scanner"
-)
+    if threat_intel_result and threat_intel_result.get("score") is not None:
+        components["threat_intel"] = (threat_intel_result["score"], 0.40)
 
+    total_weight = sum(w for _, w in components.values())
+    weighted_sum = sum(s * w for s, w in components.values())
+    final_score = int(weighted_sum / total_weight) if total_weight > 0 else 0
+    final_score = min(final_score, 100)
 
+    confidence = "High" if "threat_intel" in components else "Medium"
 
-uploaded_file = st.file_uploader(
+    if final_score >= 70:
+        risk_level = "High Risk 🔴"
+    elif final_score >= 40:
+        risk_level = "Medium Risk 🟡"
+    else:
+        risk_level = "Low Risk 🟢"
 
-    "Upload QR Code Image",
-
-    type=[
-        "png",
-        "jpg",
-        "jpeg"
-    ]
-
-)
-
-
-
-if uploaded_file:
-
-
-    image = Image.open(
-        uploaded_file
-    )
+    return final_score, risk_level, confidence
 
 
-    img_array = np.array(
-        image.convert("L")
-    )
+# ---------------------------------
+# UI Rendering Helpers
+# ---------------------------------
+
+def render_full_report(url):
+    with st.spinner("Analyzing URL structure..."):
+        structure_result = analyze_url_structure(url)
+
+    with st.spinner("Analyzing domain (WHOIS / SSL / DNS)..."):
+        domain_result = analyze_domain(url)
+
+    final_score, risk_level, confidence = compute_final_score(structure_result, domain_result)
+
+    st.session_state["last_url"] = url
+    st.session_state["structure_result"] = structure_result
+    st.session_state["domain_result"] = domain_result
+    st.session_state["threat_intel_result"] = None
+    st.session_state["final_score"] = final_score
+    st.session_state["risk_level"] = risk_level
+    st.session_state["confidence"] = confidence
 
 
-    result = decode(
-        img_array
-    )
+def display_report():
+    if "last_url" not in st.session_state:
+        return
 
+    url = st.session_state["last_url"]
+    structure_result = st.session_state["structure_result"]
+    domain_result = st.session_state["domain_result"]
+    threat_intel_result = st.session_state.get("threat_intel_result")
+    final_score = st.session_state["final_score"]
+    risk_level = st.session_state["risk_level"]
+    confidence = st.session_state["confidence"]
 
+    st.subheader("🛡️ ABS THREAT REPORT")
 
-    if result:
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Risk Score", f"{final_score}/100")
+    c2.metric("Threat Level", risk_level)
+    c3.metric("Confidence", confidence)
 
+    with st.expander("🧩 URL Structure Analysis", expanded=True):
+        st.write(f"Sub-score: {structure_result['score']}/100")
+        for r in structure_result["reasons"]:
+            st.write(f"- {r}")
+        if structure_result.get("redirect_chain") and len(structure_result["redirect_chain"]) > 1:
+            st.write("Redirect chain:")
+            for hop in structure_result["redirect_chain"]:
+                st.code(hop)
 
-        qr_data = result[0].data.decode(
-            "utf-8"
-        )
+    with st.expander("🌐 Domain Analysis", expanded=True):
+        st.write(f"Sub-score: {domain_result['score']}/100")
+        for r in domain_result["reasons"]:
+            st.write(f"- {r}")
 
-
-
-        st.success(
-            "QR Code successfully decoded"
-        )
-
-
-        st.write(
-            "Extracted Data:"
-        )
-
-
-        st.code(
-            qr_data
-        )
-
-
-
-        if valid_url(qr_data):
-
-
-            qr_result = analyze_url(
-                qr_data
-            )
-
-
-            st.subheader(
-                "🛡️ ABS VIGIL Analysis"
-            )
-
-
-            st.json(
-                qr_result
-            )
-
-
-
-            if st.button(
-                "🔍 Scan QR URL with VirusTotal"
-            ):
-
-
-                vt = check_virustotal(
-                    qr_data
+    with st.expander("🔎 Threat Intelligence", expanded=True):
+        if threat_intel_result is None:
+            st.info("Not yet run — click below to query VirusTotal + Google Safe Browsing.")
+            if st.button("🔍 Run Threat Intelligence Scan", key="ti_btn"):
+                with st.spinner("Querying VirusTotal and Google Safe Browsing..."):
+                    ti_result = run_threat_intel(url)
+                st.session_state["threat_intel_result"] = ti_result
+                final_score, risk_level, confidence = compute_final_score(
+                    structure_result, domain_result, ti_result
                 )
-
-
-                st.subheader(
-                    "VirusTotal Intelligence"
-                )
-
-
-                st.write(
-                    vt
-                )
-
-
-
+                st.session_state["final_score"] = final_score
+                st.session_state["risk_level"] = risk_level
+                st.session_state["confidence"] = confidence
+                st.rerun()
         else:
+            vt = threat_intel_result["vt"]
+            gsb = threat_intel_result["gsb"]
 
+            st.write("**VirusTotal**")
+            if vt.get("available") and "stats" in vt:
+                st.json(vt["stats"])
+            else:
+                st.write(f"- {vt.get('reason', 'Unavailable')}")
 
-            st.warning(
-                "QR code does not contain a valid URL"
-            )
+            st.write("**Google Safe Browsing**")
+            if gsb.get("available"):
+                st.write("⚠️ Flagged as threat" if gsb["flagged"] else "✅ No threats found")
+            else:
+                st.write(f"- {gsb.get('reason', 'Unavailable')}")
 
-
-
-    else:
-
-
-        st.warning(
-            "No QR code detected"
+    # Save once (avoid duplicate rows on rerun from unrelated widget interaction)
+    save_key = f"saved_{url}_{final_score}_{'ti' if threat_intel_result else 'noti'}"
+    if not st.session_state.get(save_key):
+        save_scan(
+            url,
+            final_score,
+            risk_level,
+            confidence,
+            {
+                "structure": structure_result,
+                "domain": domain_result,
+                "threat_intel": threat_intel_result
+            }
         )
-
+        st.session_state[save_key] = True
 
 
 # ---------------------------------
-# Manual URL Scanner
+# Page Layout
 # ---------------------------------
+
+st.title("🛡️ ABS VIGIL")
+st.subheader("Advanced Behavioral Shield")
+st.write(
+    """
+    An intelligent cybersecurity platform to analyze QR codes,
+    URLs, and suspicious links for phishing threats, malicious
+    indicators, and threat intelligence insights.
+    """
+)
+
+tab_scan, tab_qr, tab_history = st.tabs(["🌐 URL Scanner", "📱 QR Scanner", "🗂️ Scan History"])
+
+with tab_scan:
+    st.write("Enter a URL to run it through the full ABS VIGIL pipeline: "
+             "URL Structure → Domain Analysis → Threat Intel → Risk Scoring.")
+
+    url_input = st.text_input("Enter website URL", key="manual_url")
+
+    if st.button("Analyze Threat", key="analyze_btn"):
+        if not url_input:
+            st.error("Please enter a URL")
+        elif not valid_url(url_input):
+            st.error("Invalid URL format")
+        else:
+            render_full_report(url_input)
+
+    display_report()
+
+with tab_qr:
+    st.write("Upload a QR code image to extract and analyze its embedded URL.")
+
+    uploaded_file = st.file_uploader(
+        "Upload QR Code Image", type=["png", "jpg", "jpeg"], key="qr_upload"
+    )
+
+    if uploaded_file:
+        image = Image.open(uploaded_file)
+        img_array = np.array(image.convert("L"))
+        result = decode(img_array)
+
+        if result:
+            qr_data = result[0].data.decode("utf-8")
+            st.success("QR Code successfully decoded")
+            st.write("Extracted Data:")
+            st.code(qr_data)
+
+            if valid_url(qr_data):
+                if st.button("Analyze QR URL", key="qr_analyze_btn"):
+                    render_full_report(qr_data)
+                display_report()
+            else:
+                st.warning("QR code does not contain a valid URL")
+        else:
+            st.warning("No QR code detected")
+
+with tab_history:
+    st.write("Past scans stored locally in SQLite.")
+
+    rows = load_history()
+
+    if rows:
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button("🗑️ Clear History"):
+                clear_history()
+                st.rerun()
+
+        st.table(
+            [
+                {
+                    "Time": r[0],
+                    "URL": (r[1][:50] + "...") if len(r[1]) > 50 else r[1],
+                    "Score": r[2],
+                    "Risk Level": r[3],
+                    "Confidence": r[4]
+                }
+                for r in rows
+            ]
+        )
+    else:
+        st.info("No scans recorded yet. Run a scan to see history here.")
 
 st.divider()
-
-
-st.subheader(
-    "🌐 Website Threat Scanner"
-)
-
-
-
-url = st.text_input(
-    "Enter website URL"
-)
-
-
-
-if st.button(
-    "Analyze Threat"
-):
-
-
-    if not url:
-
-
-        st.error(
-            "Please enter a URL"
-        )
-
-
-
-    elif not valid_url(url):
-
-
-        st.error(
-            "Invalid URL format"
-        )
-
-
-
-    else:
-
-
-        st.session_state["url"] = url
-
-
-
-if "url" in st.session_state:
-
-
-    scanned_url = st.session_state["url"]
-
-
-
-    analysis = analyze_url(
-        scanned_url
-    )
-
-
-
-    st.subheader(
-        "🛡️ Behavioral Threat Analysis"
-    )
-
-
-    st.json(
-        analysis
-    )
-
-
-
-    if st.button(
-        "🔍 Run VirusTotal Intelligence Scan"
-    ):
-
-
-        vt_result = check_virustotal(
-            scanned_url
-        )
-
-
-        st.subheader(
-            "VirusTotal Results"
-        )
-
-
-        st.write(
-            vt_result
-        )
-
-
-
-# ---------------------------------
-# Footer
-# ---------------------------------
-
-st.divider()
-
-
-st.caption(
-    "🛡️ ABS VIGIL | Advanced Behavioral Shield | Cyber Threat Intelligence Platform"
-)
+st.caption("🛡️ ABS VIGIL | Advanced Behavioral Shield | Cyber Threat Intelligence Platform")
